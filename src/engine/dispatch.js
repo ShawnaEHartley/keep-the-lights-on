@@ -40,6 +40,7 @@ export function runDay({
 
     let demand = 0
     for (const b of buildings) {
+      if (b.type === 'utility' || b.type === 'peaker') continue  // infrastructure, not demand
       const shape   = getLoadShape(b.type)
       const daily   = BUILDING_DAILY[b.type] ?? 6
       const tempMod = TEMP_AFFECTED.has(b.type) ? acMult : 1

@@ -1,27 +1,31 @@
 import { GRID_COLS, GRID_ROWS } from '../state/cityModel.js'
 
 const BUILDING_STYLE = {
-  house:     { bg: '#D4A96A', border: '#B8874A', label: 'House',   icon: '⌂' },
-  wfh_house: { bg: '#C07848', border: '#9A5A2E', label: 'WFH',     icon: '⌂' },
-  office:    { bg: '#7A9AB5', border: '#4A6F8A', label: 'Office',  icon: '▣' },
-  grocery:   { bg: '#7AAF8A', border: '#4A7F5A', label: 'Grocery', icon: '▪' },
+  house:     { bg: '#D4A96A', border: '#B8874A', label: 'House',   icon: '⌂',  infra: false },
+  wfh_house: { bg: '#C07848', border: '#9A5A2E', label: 'WFH',     icon: '⌂',  infra: false },
+  office:    { bg: '#7A9AB5', border: '#4A6F8A', label: 'Office',  icon: '▣',  infra: false },
+  grocery:   { bg: '#7AAF8A', border: '#4A7F5A', label: 'Grocery', icon: '▪',  infra: false },
+  utility:   { bg: '#3A4A5A', border: '#1B2B3A', label: 'Utility', icon: '⚡', infra: true  },
+  peaker:    { bg: '#6A3020', border: '#3A1008', label: 'Peaker',  icon: '🔥', infra: true  },
 }
 
 function BuildingTile({ building }) {
-  const s = BUILDING_STYLE[building.type] ?? { bg: '#ccc', border: '#aaa', label: building.type, icon: '?' }
+  const s = BUILDING_STYLE[building.type] ?? { bg: '#ccc', border: '#aaa', label: building.type, icon: '?', infra: false }
+  const labelColor = s.infra ? '#9AB0C4' : '#2C1A08'
   return (
     <div title={s.label} style={{
       width: '100%', height: '100%',
       background: s.bg,
       border: `2px solid ${s.border}`,
-      borderRadius: 6,
+      borderRadius: s.infra ? 4 : 6,
       display: 'flex', flexDirection: 'column',
       alignItems: 'center', justifyContent: 'center',
       cursor: 'default',
       userSelect: 'none',
+      opacity: s.infra ? 0.9 : 1,
     }}>
       <span style={{ fontSize: '1.1rem', lineHeight: 1 }}>{s.icon}</span>
-      <span style={{ fontSize: '0.55rem', letterSpacing: '0.06em', textTransform: 'uppercase', color: '#2C1A08', marginTop: 2, fontFamily: 'monospace' }}>{s.label}</span>
+      <span style={{ fontSize: '0.55rem', letterSpacing: '0.06em', textTransform: 'uppercase', color: labelColor, marginTop: 2, fontFamily: 'monospace' }}>{s.label}</span>
     </div>
   )
 }
@@ -60,11 +64,18 @@ export default function Grid({ city }) {
       </div>
 
       {/* Legend */}
-      <div style={{ display: 'flex', gap: '1rem', marginTop: '0.8rem', flexWrap: 'wrap' }}>
-        {Object.entries(BUILDING_STYLE).map(([type, s]) => (
+      <div style={{ display: 'flex', gap: '1.2rem', marginTop: '0.8rem', flexWrap: 'wrap', alignItems: 'center' }}>
+        {Object.entries(BUILDING_STYLE).filter(([, s]) => !s.infra).map(([type, s]) => (
           <div key={type} style={{ display: 'flex', alignItems: 'center', gap: '0.3rem' }}>
             <div style={{ width: 10, height: 10, borderRadius: 2, background: s.bg, border: `1px solid ${s.border}` }} />
             <span style={{ fontSize: '0.68rem', color: '#7A6A56', fontFamily: 'monospace', letterSpacing: '0.04em' }}>{s.label}</span>
+          </div>
+        ))}
+        <span style={{ color: '#C8C0B4', fontSize: '0.65rem' }}>|</span>
+        {Object.entries(BUILDING_STYLE).filter(([, s]) => s.infra).map(([type, s]) => (
+          <div key={type} style={{ display: 'flex', alignItems: 'center', gap: '0.3rem' }}>
+            <div style={{ width: 10, height: 10, borderRadius: 2, background: s.bg, border: `1px solid ${s.border}` }} />
+            <span style={{ fontSize: '0.68rem', color: '#9A8A76', fontFamily: 'monospace', letterSpacing: '0.04em' }}>{s.label}</span>
           </div>
         ))}
       </div>
