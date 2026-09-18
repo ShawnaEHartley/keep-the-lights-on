@@ -1,106 +1,162 @@
 import { getLoadShape, getSolarShape } from './shapes.js'
+import { ROUND_TRIP_EFF, SOLAR_DAILY } from './constants.js'
 
-// Energy units (EU) per day per building at baseline (72°F, 0% modernization)
-const BUILDING_DAILY = { house: 6, wfh_house: 7.5, office: 12, grocery: 10 }
+// Daily energy totals per building type (EU/day at baseline)
+const BUILDING_DAILY = { house: 3, wfh_house: 3.75, office: 6, grocery: 5 }
 const TEMP_AFFECTED  = new Set(['house', 'wfh_house', 'grocery'])
+const INFRA_TYPES    = new Set(['utility', 'peaker'])
 
-const SOLAR_DAILY    = 8     // EU/day per solar unit at full sun
-const TEMP_THRESHOLD = 72    // °F — below this no AC load
-const TEMP_COEFF     = 0.025 // fractional load increase per °F above threshold
+// Thermal mass: AC/heat load peaks in evening, not just at peak outdoor temp
+const TEMP_THRESHOLD = 72     // °F — below this, no extra AC/heat load
+const TEMP_COEFF     = 0.025  // fractional load increase per °F above threshold
 
-// Grid caps — tuned to calibration anchor (§8): ~2 brownouts at hours 17–18
-export const U_CAP    = 3.1  // utility grid max EU/hour
-export const PEAK_CAP = 0.5  // peaker supplement max EU/hour
+// Shed lowest-priority buildings first (spec §3.5)
+const SHED_ORDER = ['house', 'wfh_house', 'office', 'grocery']
 
-export function runDay({
-  buildings,
-  solarUnits = [],
-  batteries  = [],
-  uCap       = U_CAP,
-  peakCap    = PEAK_CAP,
-  levers     = {},
-}) {
-  const { temperature = 72, cloudCover = 0, modernization = 30 } = levers
-  const modFactor  = 1 - (modernization / 100) * 0.15
-  const tempDelta  = Math.max(0, temperature - TEMP_THRESHOLD)
-  const solarScale = 1 - cloudCover / 100
-  const solarShape = getSolarShape()
-  const totalSolar = solarUnits.reduce((s, u) => s + u, 0) * SOLAR_DAILY
+// ── Main dispatch loop ────────────────────────────────────────────────────────
 
-  // Batteries start at 50% — charged from grid overnight in real operation
+/**
+ * runDay({ buildings, solarUnits, batteries, weather }) → { hourly, totals }
+ *
+ * weather comes from expectedWeather() (estimate) or sampleWeather() (Run Day).
+ * buildings: array of { id, type, col, row }. Infrastructure types are ignored for demand.
+ * solarUnits: array of numbers (each = 1 rooftop unit producing SOLAR_DAILY EU/day).
+ * batteries: array of { capacity, powerRate? }. powerRate defaults to capacity.
+ */
+export function runDay({ buildings, solarUnits = [], batteries = [], weather = {} }) {
+  const {
+    temperature       = 72,
+    season            = 'summer',
+    cloudByHour       = new Array(24).fill(0),
+    uCap              = 1.9,
+    peakCap           = 0.2,
+    demandSpikeFactor = 1.0,
+    solarDailyFactor  = 1.0,
+  } = weather
+
+  const tempDelta      = Math.max(0, temperature - TEMP_THRESHOLD)
+  const solarShape     = getSolarShape(season)
+  const totalSolarUnits = solarUnits.reduce((s, u) => s + u, 0)
+  const dailySolarEU   = totalSolarUnits * SOLAR_DAILY * solarDailyFactor
+
+  // Batteries start at 50% charge
   const charge = batteries.map(b => b.capacity * 0.5)
 
+  // Demand-side buildings (non-infrastructure)
+  const demandBuildings = buildings.filter(b => !INFRA_TYPES.has(b.type))
+
   const hourly = []
-  let peakerEnergy = 0, brownoutHours = 0, buildingHoursLost = 0, totalCurtailment = 0
+  let peakerEnergy = 0, brownoutHours = 0, perBuildingHoursLost = 0
+  let totalCurtailment = 0
+  let totalSolar = 0, totalBattery = 0, totalBaseload = 0, totalPeaker = 0
+  let peakNetDemand = 0
 
   for (let t = 0; t < 24; t++) {
-    // Thermal mass means AC load peaks in evening, not just when it's hottest outside
+    // Thermal mass: load peaks lag behind outdoor temp
     const timeFactor = (t >= 16 && t <= 21) ? 1.3 : (t >= 7 ? 0.9 : 0.5)
     const acMult     = 1 + tempDelta * TEMP_COEFF * timeFactor
 
-    let demand = 0
-    for (const b of buildings) {
-      if (b.type === 'utility' || b.type === 'peaker') continue  // infrastructure, not demand
-      const shape   = getLoadShape(b.type)
-      const daily   = BUILDING_DAILY[b.type] ?? 6
+    // Per-building demand at this hour
+    const buildingDemands = demandBuildings.map(b => {
+      const shape   = getLoadShape(b.type, season)
+      const daily   = BUILDING_DAILY[b.type] ?? 3
       const tempMod = TEMP_AFFECTED.has(b.type) ? acMult : 1
-      demand += daily * shape[t] * tempMod * modFactor
-    }
+      return { id: b.id, type: b.type, demand: daily * shape[t] * tempMod * demandSpikeFactor }
+    })
 
-    // Merit order: solar → charge batteries from excess → utility → battery discharge → peaker → shortfall
+    const totalDemand = buildingDemands.reduce((s, b) => s + b.demand, 0)
+    peakNetDemand = Math.max(peakNetDemand, totalDemand)
 
-    // 1. Solar serves demand first
-    const solarGen  = totalSolar * solarShape[t] * solarScale
-    const solarUsed = Math.min(solarGen, demand)
-    let   remaining = demand - solarUsed
+    // ── Merit order ────────────────────────────────────────────────────────
+
+    // 1. Solar
+    const solarGen  = dailySolarEU * solarShape[t] * (1 - cloudByHour[t])
+    const solarUsed = Math.min(solarGen, totalDemand)
+    let   remaining = totalDemand - solarUsed
     let   solarEx   = solarGen - solarUsed
+    totalSolar     += solarUsed
 
-    // 2. Excess solar charges batteries
+    // 2. Charge batteries from solar surplus
     let charged = 0
     for (let i = 0; i < batteries.length && solarEx > 0.001; i++) {
       const room = batteries[i].capacity - charge[i]
-      const take = Math.min(solarEx, batteries[i].capacity, room)
+      const take = Math.min(solarEx, room)
       charge[i] += take
-      charged   += take
-      solarEx   -= take
+      charged    += take
+      solarEx    -= take
     }
     const curtailment = Math.max(0, solarEx)
     totalCurtailment += curtailment
 
-    // 3. Utility grid (cheap baseload)
+    // 3. Utility baseload (firm supply; battery is held in reserve for peak)
     const utility = Math.min(remaining, uCap)
-    remaining -= utility
+    remaining    -= utility
+    totalBaseload += utility
 
-    // 4. Battery discharge covers what utility couldn't
+    // 4. Battery discharge — fires after utility so stored charge is saved for peak hours
+    //    (dispatch × ROUND_TRIP_EFF = energy delivered; battery charge falls by drawn amount)
     let discharged = 0
     for (let i = 0; i < batteries.length && remaining > 0.001; i++) {
-      const give  = Math.min(remaining, batteries[i].capacity, charge[i])
-      charge[i]  -= give
-      discharged += give
-      remaining  -= give
+      const rate    = batteries[i].powerRate ?? batteries[i].capacity
+      const deliver = Math.min(remaining, rate, charge[i] * ROUND_TRIP_EFF)
+      const drawn   = deliver / ROUND_TRIP_EFF
+      charge[i]    -= drawn
+      discharged   += deliver
+      remaining    -= deliver
     }
+    totalBattery += discharged
 
-    // 5. Peaker (expensive, last resort)
+    // 5. Peaker
     const peaker = Math.min(remaining, peakCap)
     remaining   -= peaker
     peakerEnergy += peaker
+    totalPeaker  += peaker
 
-    // 6. Shortfall = brownout
-    const shortfall = Math.max(0, remaining)
-    if (shortfall > 0.001) {
-      brownoutHours++
-      buildingHoursLost += buildings.length
+    // 6. Shortfall → shed buildings by priority tier (spec §3.5)
+    const rawShortfall  = Math.max(0, remaining)
+    const shedBuildingIds = []
+
+    if (rawShortfall > 0.001) {
+      let residual = rawShortfall
+      outer: for (const tierType of SHED_ORDER) {
+        for (const bd of buildingDemands) {
+          if (bd.type !== tierType) continue
+          shedBuildingIds.push(bd.id)
+          perBuildingHoursLost += 1
+          residual -= bd.demand
+          if (residual <= 0.001) break outer
+        }
+      }
+      brownoutHours++  // any hour with shedding = brownout hour
     }
 
     hourly.push({
-      t, demand,
-      solarServed: solarUsed, batteryCharge: charged, batteryDischarge: discharged,
-      utility, peaker, shortfall, curtailment,
+      t, demand: totalDemand,
+      solarServed:      solarUsed,
+      batteryCharge:    charged,
+      batteryDischarge: discharged,
+      utility, peaker,
+      shortfall:     rawShortfall,
+      curtailment,
+      shedBuildingIds,
     })
   }
 
+  // Reserve margin at the day's peak hour (spec §3.9)
+  const availableCap   = uCap + peakCap
+  const reserveMargin  = peakNetDemand > 0
+    ? (availableCap - peakNetDemand) / peakNetDemand
+    : 1
+
   return {
     hourly,
-    totals: { peakerEnergy, brownoutHours, buildingHoursLost, curtailment: totalCurtailment },
+    totals: {
+      peakerEnergy,
+      brownoutHours,
+      perBuildingHoursLost,
+      curtailment: totalCurtailment,
+      energyBySource: { solar: totalSolar, battery: totalBattery, baseload: totalBaseload, peaker: totalPeaker },
+      reserveMargin,
+    },
   }
 }

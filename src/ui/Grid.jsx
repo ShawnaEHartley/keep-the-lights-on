@@ -9,29 +9,33 @@ const BUILDING_STYLE = {
   peaker:    { bg: '#6A3020', border: '#3A1008', label: 'Peaker',  icon: '🔥', infra: true  },
 }
 
-function BuildingTile({ building }) {
+function BuildingTile({ building, shed }) {
   const s = BUILDING_STYLE[building.type] ?? { bg: '#ccc', border: '#aaa', label: building.type, icon: '?', infra: false }
-  const labelColor = s.infra ? '#9AB0C4' : '#2C1A08'
+  const labelColor = shed ? '#7A6A56' : s.infra ? '#9AB0C4' : '#2C1A08'
   return (
-    <div title={s.label} style={{
+    <div title={shed ? `${s.label} — no power this hour` : s.label} style={{
       width: '100%', height: '100%',
-      background: s.bg,
-      border: `2px solid ${s.border}`,
+      background: shed ? '#2A2420' : s.bg,
+      border: `2px solid ${shed ? '#5A4A40' : s.border}`,
       borderRadius: s.infra ? 4 : 6,
       display: 'flex', flexDirection: 'column',
       alignItems: 'center', justifyContent: 'center',
       cursor: 'default',
       userSelect: 'none',
-      opacity: s.infra ? 0.9 : 1,
+      opacity: shed ? 0.7 : s.infra ? 0.9 : 1,
+      transition: 'background 0.35s ease, border-color 0.35s ease',
     }}>
-      <span style={{ fontSize: '1.1rem', lineHeight: 1 }}>{s.icon}</span>
-      <span style={{ fontSize: '0.55rem', letterSpacing: '0.06em', textTransform: 'uppercase', color: labelColor, marginTop: 2, fontFamily: 'monospace' }}>{s.label}</span>
+      <span style={{ fontSize: '1.1rem', lineHeight: 1, filter: shed ? 'grayscale(1)' : 'none' }}>{s.icon}</span>
+      <span style={{ fontSize: '0.55rem', letterSpacing: '0.06em', textTransform: 'uppercase', color: labelColor, marginTop: 2, fontFamily: 'monospace' }}>
+        {shed ? 'no power' : s.label}
+      </span>
     </div>
   )
 }
 
-export default function Grid({ city }) {
+export default function Grid({ city, overlay, shedIds = [] }) {
   const { buildings } = city
+  const shedSet = new Set(shedIds)
 
   // Build lookup: "col-row" → building
   const byPos = {}
@@ -46,21 +50,25 @@ export default function Grid({ city }) {
 
   return (
     <div>
-      <div style={{
-        display: 'grid',
-        gridTemplateColumns: `repeat(${GRID_COLS}, 56px)`,
-        gridTemplateRows: `repeat(${GRID_ROWS}, 56px)`,
-        gap: 5,
-      }}>
-        {cells.map(({ col, row, building }) => (
-          <div key={`${col}-${row}`} style={{
-            background: building ? 'transparent' : '#E8E2D9',
-            borderRadius: 6,
-            border: building ? 'none' : '1px solid #D4CCC0',
-          }}>
-            {building && <BuildingTile building={building} />}
-          </div>
-        ))}
+      {/* position:relative so FlowArrows SVG can overlay the cell area */}
+      <div style={{ position: 'relative', display: 'inline-block' }}>
+        <div style={{
+          display: 'grid',
+          gridTemplateColumns: `repeat(${GRID_COLS}, 56px)`,
+          gridTemplateRows: `repeat(${GRID_ROWS}, 56px)`,
+          gap: 5,
+        }}>
+          {cells.map(({ col, row, building }) => (
+            <div key={`${col}-${row}`} style={{
+              background: building ? 'transparent' : '#E8E2D9',
+              borderRadius: 6,
+              border: building ? 'none' : '1px solid #D4CCC0',
+            }}>
+              {building && <BuildingTile building={building} shed={shedSet.has(building.id)} />}
+            </div>
+          ))}
+        </div>
+        {overlay}
       </div>
 
       {/* Legend */}

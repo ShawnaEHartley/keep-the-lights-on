@@ -1,7 +1,10 @@
 // Grid layout, entity config, levers, day counter.
 
-export const GRID_COLS = 8
-export const GRID_ROWS = 6
+export const GRID_COLS  = 8
+export const GRID_ROWS  = 6
+export const CELL_SIZE  = 56
+export const CELL_GAP   = 5
+export const CELL_STEP  = CELL_SIZE + CELL_GAP  // 61 — center-to-center distance
 
 export const DEFAULT_CITY = {
   buildings: [
@@ -18,10 +21,12 @@ export const DEFAULT_CITY = {
   ],
   solarUnits: [],
   batteries: [],
+  // levers set the climate baseline (spec §4); actual day is sampled around these on Run Day
   levers: {
-    temperature:    80,
-    cloudCover:      0,
-    modernization:  30,
+    temperature:    80,    // °F — cooling/heating baseline
+    cloudCover:      0,    // % — solar availability baseline
+    season:      'summer', // 'summer' | 'winter'
+    modernization:  30,    // % renewable mix — sets uCap, peakCap, and baseload carbon intensity
   },
   day: 1,
 }
