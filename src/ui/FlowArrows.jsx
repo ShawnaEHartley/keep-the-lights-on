@@ -11,7 +11,7 @@ const DEMAND_TYPES = new Set(['house', 'wfh_house', 'office', 'grocery'])
 
 const flowWidth = energy => Math.max(1, Math.min(7, energy * 12))
 
-function FlowLine({ x1, y1, x2, y2, color, width, delay = 0, opacity = 0.72 }) {
+function FlowLine({ x1, y1, x2, y2, color, width, delay = 0, opacity = 0.72, animate = true }) {
   return (
     <line
       x1={x1} y1={y1} x2={x2} y2={y2}
@@ -20,15 +20,17 @@ function FlowLine({ x1, y1, x2, y2, color, width, delay = 0, opacity = 0.72 }) {
       strokeDasharray="9 5"
       strokeLinecap="round"
       opacity={opacity}
-      style={{
+      style={animate ? {
         animation: 'arrowFlow 0.9s linear infinite',
         animationDelay: `${delay}s`,
-      }}
+      } : undefined}
     />
   )
 }
 
-export default function FlowArrows({ buildings, hourData }) {
+// `animate` is false once the clock stops (day over, or paused) — power should
+// not keep visibly moving when the day isn't running.
+export default function FlowArrows({ buildings, hourData, animate = true }) {
   if (!hourData) return null
 
   const utility = buildings.find(b => b.type === 'utility')
@@ -71,6 +73,7 @@ export default function FlowArrows({ buildings, hourData }) {
                 color="#4A7EB5"
                 width={flowWidth(utilityPerBldg)}
                 delay={i * 0.06}
+                animate={animate}
               />
             )}
             {/* Peaker → building (ember red) — only when running */}
@@ -81,6 +84,7 @@ export default function FlowArrows({ buildings, hourData }) {
                 width={flowWidth(peakerPerBldg)}
                 delay={i * 0.06 + 0.25}
                 opacity={0.65}
+                animate={animate}
               />
             )}
           </g>

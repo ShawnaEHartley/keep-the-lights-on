@@ -8,13 +8,16 @@ export const CELL_STEP  = CELL_SIZE + CELL_GAP  // 61 — center-to-center dista
 
 export const DEFAULT_CITY = {
   buildings: [
+    // Scattered on purpose: each tile is a separate circuit in a different
+    // part of town, not five houses on one street (see §3.5 — shedding drops
+    // circuits). Position is cosmetic; the engine only counts type.
     { id: 1, type: 'house',   col: 1, row: 1 },
-    { id: 2, type: 'house',   col: 2, row: 1 },
-    { id: 3, type: 'house',   col: 3, row: 1 },
-    { id: 4, type: 'house',   col: 4, row: 1 },
-    { id: 5, type: 'house',   col: 5, row: 1 },
-    { id: 6, type: 'grocery', col: 2, row: 3 },
-    { id: 7, type: 'office',  col: 4, row: 3 },
+    { id: 2, type: 'house',   col: 3, row: 2 },
+    { id: 3, type: 'house',   col: 6, row: 1 },
+    { id: 4, type: 'house',   col: 2, row: 5 },
+    { id: 5, type: 'house',   col: 5, row: 4 },
+    { id: 6, type: 'grocery', col: 4, row: 3 },
+    { id: 7, type: 'office',  col: 7, row: 2 },
     // Infrastructure — fixed, not player-placed
     { id: 8, type: 'utility', col: 7, row: 5 },
     { id: 9, type: 'peaker',  col: 8, row: 5 },

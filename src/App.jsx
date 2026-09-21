@@ -12,7 +12,7 @@ import FlowArrows from './ui/FlowArrows.jsx'
 const HOUR_MS = 700  // ms per simulated hour
 
 export default function App() {
-  const [city]          = useState(DEFAULT_CITY)
+  const [city, setCity] = useState(DEFAULT_CITY)
   const [hour,           setHour]        = useState(0)
   const [playing,        setPlaying]     = useState(false)
   const [started,        setStarted]     = useState(false)
@@ -69,6 +69,18 @@ export default function App() {
     setDayComplete(false)
     setPlaying(true)
   }, [city, climate])
+
+  // Re-site a circuit. Cosmetic only — the engine counts building types, not
+  // positions — so the estimate is unchanged; only the flow arrows re-route.
+  const handleMoveBuilding = useCallback((id, col, row) => {
+    setCity(prev => {
+      if (prev.buildings.some(b => b.col === col && b.row === row)) return prev
+      return {
+        ...prev,
+        buildings: prev.buildings.map(b => (b.id === id ? { ...b, col, row } : b)),
+      }
+    })
+  }, [])
 
   const handlePause  = useCallback(() => setPlaying(false), [])
   const handleResume = useCallback(() => {
@@ -133,11 +145,15 @@ export default function App() {
           <Grid
             city={city}
             shedIds={shedIds}
+            onMoveBuilding={handleMoveBuilding}
             overlay={
               <FlowArrows
                 buildings={city.buildings}
-                hourData={started ? hourData : null}
+                // Day over → clear the overlay entirely. Paused mid-day → keep
+                // the lines but frozen (see `animate`).
+                hourData={started && !dayComplete ? hourData : null}
                 shedIds={shedIds}
+                animate={playing}
               />
             }
           />
