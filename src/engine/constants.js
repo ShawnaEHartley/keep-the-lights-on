@@ -21,16 +21,28 @@ export const BENCHMARK_CARBON = 0.10       // kg CO₂ / EU
 export const UTILITY_COST = 0.80           // $ / EU
 export const PEAKER_COST  = 2.00           // $ / EU
 
-// Grid capacity from renewable-mix (modernization) lever.
-// Calibration: at 30%, temp=80°F the anchor city (5 house+grocery+office) peaks at ~1.97 EU/hr.
-// uCap+peakCap=1.90 → sits between t=16 demand (1.849, no brownout) and t=17 (1.970, brownout).
+// Per-unit supply capacity. Total grid capacity = these × how many utility /
+// peaker tiles the city actually has, so removing the utility takes you
+// off-grid and adding a peaker buys headroom.
+//
+// Calibration: at 30% mix, temp=80°F, the anchor city (5 house + grocery +
+// office) peaks at ~1.97 EU/hr. One utility (1.80) cannot cover that alone —
+// the peaker picks up the evening shoulder, which is the point. One utility
+// plus one peaker (2.80) covers it with room for a bad contingency roll, so
+// the city stays lit and pays for it in gas instead.
 export function capsFromModernization(modernization) {
   const m = Math.max(0, Math.min(100, modernization))
   return {
-    uCap:    Math.max(0.3, 1.80 + (m - 30) * 0.025),
-    peakCap: Math.max(0.0, 0.10 + (m - 30) * 0.004),
+    // Cleaner grid → more baseload headroom, so the peaker is needed less.
+    uCapPerUtility:   Math.max(0.3, 1.80 + (m - 30) * 0.025),
+    // A gas plant's nameplate doesn't change with the grid mix — only how
+    // often it has to run. Holding this constant is what lets modernization
+    // visibly quiet the peaker.
+    peakCapPerPeaker: PEAKER_CAP_PER_UNIT,
   }
 }
+
+export const PEAKER_CAP_PER_UNIT = 1.0
 
 // Daily contingency ranges for sampleWeather (spec §3.9)
 export const CONTINGENCY = {

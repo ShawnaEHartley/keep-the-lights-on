@@ -7,7 +7,7 @@ import { baseloadCarbon, PEAKER_CARBON, BENCHMARK_CARBON, UTILITY_COST, PEAKER_C
  */
 export function computeMetrics(actualResult, estimateResult = null, prevDayResult = null, renewableMix = 30) {
   const { totals } = actualResult
-  const { energyBySource, peakerEnergy, brownoutHours, perBuildingHoursLost, curtailment, reserveMargin } = totals
+  const { energyBySource, peakerEnergy, peakerHours, peakerPeakUtilization, peakHour, brownoutHours, perBuildingHoursLost, curtailment, reserveMargin } = totals
 
   const baseloadInt = baseloadCarbon(renewableMix)
 
@@ -29,6 +29,9 @@ export function computeMetrics(actualResult, estimateResult = null, prevDayResul
       perBuildingHoursLost,
     },
     peakerEnergy: roundOne(peakerEnergy),
+    peakerHours,
+    peakerPeakUtilization: Math.round((peakerPeakUtilization ?? 0) * 100),
+    peakHour,
     curtailment:  roundOne(curtailment),
     carbon: {
       total:     carbonTotal,
@@ -51,6 +54,7 @@ export function computeMetrics(actualResult, estimateResult = null, prevDayResul
     metrics.vsEstimate = {
       brownoutHours: brownoutHours - est.brownoutHours,
       peakerEnergy:  roundOne(peakerEnergy - est.peakerEnergy),
+      peakerHours:   peakerHours - est.peakerHours,
       carbon:        carbonTotal   - estCarbon,
     }
   }

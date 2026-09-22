@@ -30,21 +30,39 @@ function FlowLine({ x1, y1, x2, y2, color, width, delay = 0, opacity = 0.72, ani
 
 // `animate` is false once the clock stops (day over, or paused) — power should
 // not keep visibly moving when the day isn't running.
+// Blend between grid blue and gas red by how much of the delivered power is
+// coming from the peaker.
+function mixColor(gasShare) {
+  const a = [0x4A, 0x7E, 0xB5]   // grid blue
+  const b = [0xC4, 0x34, 0x1A]   // gas red
+  const t = Math.max(0, Math.min(1, gasShare))
+  const c = a.map((v, i) => Math.round(v + (b[i] - v) * t))
+  return `rgb(${c[0]},${c[1]},${c[2]})`
+}
+
 export default function FlowArrows({ buildings, hourData, animate = true }) {
   if (!hourData) return null
 
-  const utility = buildings.find(b => b.type === 'utility')
-  const peaker  = buildings.find(b => b.type === 'peaker')
-  const demand  = buildings.filter(b => DEMAND_TYPES.has(b.type))
+  // Power flows the way it really does: a building has ONE service connection,
+  // fed by the grid. The peaker doesn't run its own wires to anyone's house —
+  // it feeds INTO the grid, and the grid delivers the mix. So peakers draw a
+  // short line to the utility, and only the utility draws lines to buildings.
+  // Those lines redden as more of what's being delivered is gas.
+  const utilities = buildings.filter(b => b.type === 'utility')
+  const peakers   = buildings.filter(b => b.type === 'peaker')
+  const demand    = buildings.filter(b => DEMAND_TYPES.has(b.type))
 
-  if (!utility || demand.length === 0) return null
+  if (demand.length === 0) return null
 
-  const utilityPerBldg = hourData.utility / demand.length
-  const peakerPerBldg  = hourData.peaker  / demand.length
+  const delivered = hourData.utility + hourData.peaker
+  const gasShare  = delivered > 0.001 ? hourData.peaker / delivered : 0
+  const mixed     = mixColor(gasShare)
 
-  const ux = cx(utility.col), uy = cy(utility.row)
-  const px = peaker ? cx(peaker.col) : ux
-  const py = peaker ? cy(peaker.row) : uy
+  // With no utility tile the city is islanded — the peaker is the only supply
+  // and has to feed buildings directly.
+  const sources     = utilities.length ? utilities : peakers
+  const perLine     = sources.length ? delivered / (demand.length * sources.length) : 0
+  const peakerPerUp = peakers.length ? hourData.peaker / peakers.length : 0
 
   return (
     <svg
@@ -62,42 +80,43 @@ export default function FlowArrows({ buildings, hourData, animate = true }) {
         `}</style>
       </defs>
 
-      {demand.map((b, i) => {
+      {/* Peaker → utility: gas feeding INTO the grid, not into houses */}
+      {hourData.peaker > 0.01 && utilities.length > 0 && peakers.map((p, pi) =>
+        utilities.map(u => (
+          <FlowLine
+            key={`pu${p.id}-${u.id}`}
+            x1={cx(p.col)} y1={cy(p.row)} x2={cx(u.col)} y2={cy(u.row)}
+            color="#C4341A"
+            width={flowWidth(peakerPerUp)}
+            delay={pi * 0.1}
+            opacity={0.9}
+            animate={animate}
+          />
+        ))
+      )}
+
+      {/* Grid → buildings: one service line each, coloured by the mix it carries */}
+      {delivered > 0.01 && demand.map((b, i) => {
         const bx = cx(b.col), by = cy(b.row)
-        return (
-          <g key={b.id}>
-            {/* Utility → building (steel blue) */}
-            {hourData.utility > 0.01 && (
-              <FlowLine
-                x1={ux} y1={uy} x2={bx} y2={by}
-                color="#4A7EB5"
-                width={flowWidth(utilityPerBldg)}
-                delay={i * 0.06}
-                animate={animate}
-              />
-            )}
-            {/* Peaker → building (ember red) — only when running */}
-            {hourData.peaker > 0.01 && peaker && (
-              <FlowLine
-                x1={px} y1={py} x2={bx} y2={by}
-                color="#C45A1A"
-                width={flowWidth(peakerPerBldg)}
-                delay={i * 0.06 + 0.25}
-                opacity={0.65}
-                animate={animate}
-              />
-            )}
-          </g>
-        )
+        return sources.map((s, si) => (
+          <FlowLine
+            key={`s${s.id}-${b.id}`}
+            x1={cx(s.col)} y1={cy(s.row)} x2={bx} y2={by}
+            color={mixed}
+            width={flowWidth(perLine)}
+            delay={i * 0.06 + si * 0.1}
+            animate={animate}
+          />
+        ))
       })}
 
-      {/* Source glow circles */}
-      {hourData.utility > 0.01 && (
-        <circle cx={ux} cy={uy} r={10} fill="#4A7EB5" opacity={0.25} />
-      )}
-      {hourData.peaker > 0.01 && peaker && (
-        <circle cx={px} cy={py} r={10} fill="#C45A1A" opacity={0.22} />
-      )}
+      {/* Source glow circles — one per plant that's actually producing */}
+      {hourData.utility > 0.01 && utilities.map(u => (
+        <circle key={`gu${u.id}`} cx={cx(u.col)} cy={cy(u.row)} r={10} fill={mixed} opacity={0.28} />
+      ))}
+      {hourData.peaker > 0.01 && peakers.map(p => (
+        <circle key={`gp${p.id}`} cx={cx(p.col)} cy={cy(p.row)} r={10} fill="#C4341A" opacity={0.25} />
+      ))}
 
       {/* Shortfall halo on demand buildings during brownout hours */}
       {hourData.shortfall > 0.01 && demand.map(b => (

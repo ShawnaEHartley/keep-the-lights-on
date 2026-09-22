@@ -36,14 +36,14 @@ export function expectedWeather(climate = {}) {
     modernization = 30,
   } = climate
 
-  const { uCap, peakCap } = capsFromModernization(modernization)
+  const { uCapPerUtility, peakCapPerPeaker } = capsFromModernization(modernization)
   const cloud = cloudCover / 100
 
   return {
     temperature,
     season,
-    uCap,
-    peakCap,
+    uCapPerUtility,
+    peakCapPerPeaker,
     contingencyFactor: 1.0,
     demandSpikeFactor: 1.0,
     solarDailyFactor:  season === 'winter' ? 0.5 : 1.0,
@@ -65,7 +65,7 @@ export function sampleWeather(climate = {}, seed = Date.now()) {
   } = climate
 
   const rng = makePRNG(seed)
-  const { uCap, peakCap } = capsFromModernization(modernization)
+  const { uCapPerUtility, peakCapPerPeaker } = capsFromModernization(modernization)
 
   // Daily temperature variance ±5°F around baseline
   const actualTemp = temperature + (rng() - 0.5) * 10
@@ -87,8 +87,8 @@ export function sampleWeather(climate = {}, seed = Date.now()) {
   return {
     temperature:       actualTemp,
     season,
-    uCap:              uCap  * contingency,
-    peakCap:           peakCap * contingency,
+    uCapPerUtility:    uCapPerUtility   * contingency,
+    peakCapPerPeaker:  peakCapPerPeaker * contingency,
     contingencyFactor: contingency,
     demandSpikeFactor: demandSpike,
     solarDailyFactor:  (season === 'winter' ? 0.5 : 1.0) * (1 - rng() * 0.2),

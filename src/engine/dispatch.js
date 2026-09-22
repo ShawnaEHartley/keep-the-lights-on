@@ -28,11 +28,18 @@ export function runDay({ buildings, solarUnits = [], batteries = [], weather = {
     temperature       = 72,
     season            = 'summer',
     cloudByHour       = new Array(24).fill(0),
-    uCap              = 1.9,
-    peakCap           = 0.2,
+    uCapPerUtility    = 1.8,
+    peakCapPerPeaker  = 1.0,
     demandSpikeFactor = 1.0,
     solarDailyFactor  = 1.0,
   } = weather
+
+  // Supply capacity comes from the infrastructure actually on the map. No
+  // utility tile → uCap 0 → the city is off-grid and runs on what it built.
+  const utilityCount = buildings.filter(b => b.type === 'utility').length
+  const peakerCount  = buildings.filter(b => b.type === 'peaker').length
+  const uCap    = uCapPerUtility   * utilityCount
+  const peakCap = peakCapPerPeaker * peakerCount
 
   const tempDelta      = Math.max(0, temperature - TEMP_THRESHOLD)
   const solarShape     = getSolarShape(season)
@@ -46,10 +53,10 @@ export function runDay({ buildings, solarUnits = [], batteries = [], weather = {
   const demandBuildings = buildings.filter(b => !INFRA_TYPES.has(b.type))
 
   const hourly = []
-  let peakerEnergy = 0, brownoutHours = 0, perBuildingHoursLost = 0
+  let peakerEnergy = 0, peakerHours = 0, brownoutHours = 0, perBuildingHoursLost = 0
   let totalCurtailment = 0
   let totalSolar = 0, totalBattery = 0, totalBaseload = 0, totalPeaker = 0
-  let peakNetDemand = 0
+  let peakNetDemand = 0, peakHour = 0, peakerPeakUse = 0
 
   for (let t = 0; t < 24; t++) {
     // Thermal mass: load peaks lag behind outdoor temp
@@ -65,7 +72,7 @@ export function runDay({ buildings, solarUnits = [], batteries = [], weather = {
     })
 
     const totalDemand = buildingDemands.reduce((s, b) => s + b.demand, 0)
-    peakNetDemand = Math.max(peakNetDemand, totalDemand)
+    if (totalDemand > peakNetDemand) { peakNetDemand = totalDemand; peakHour = t }
 
     // ── Merit order ────────────────────────────────────────────────────────
 
@@ -111,6 +118,10 @@ export function runDay({ buildings, solarUnits = [], batteries = [], weather = {
     remaining   -= peaker
     peakerEnergy += peaker
     totalPeaker  += peaker
+    // Hours-run is the headline the player can actually feel — fractional EU
+    // moves too little to register (see the brief's unit-scale constraint).
+    if (peaker > 0.001) peakerHours++
+    peakerPeakUse = Math.max(peakerPeakUse, peaker)
 
     // 6. Shortfall → shed buildings by priority tier (spec §3.5)
     const rawShortfall  = Math.max(0, remaining)
@@ -152,11 +163,19 @@ export function runDay({ buildings, solarUnits = [], batteries = [], weather = {
     hourly,
     totals: {
       peakerEnergy,
+      peakerHours,
       brownoutHours,
       perBuildingHoursLost,
       curtailment: totalCurtailment,
       energyBySource: { solar: totalSolar, battery: totalBattery, baseload: totalBaseload, peaker: totalPeaker },
       reserveMargin,
+      peakHour,
+      uCap,
+      peakCap,
+      // Fraction of the whole peaker fleet in use at its busiest hour. Daily
+      // totals would read ~2% and tell the player nothing; peak-hour use is
+      // the number that means something.
+      peakerPeakUtilization: peakCap > 0 ? peakerPeakUse / peakCap : 0,
     },
   }
 }

@@ -25,7 +25,7 @@ const btn = (extra = {}) => ({
 })
 
 // 24h sparkline: demand vs supply, cloud cover background, brownout zones, hour cursor
-function DayChart({ hourly, estimateHourly, cloudByHour, supplyCapacity, currentHour, dayComplete }) {
+function DayChart({ hourly, estimateHourly, cloudByHour, supplyCapacity, utilityCapacity, currentHour, dayComplete }) {
   const VW = 600
   const VH = 58
 
@@ -45,6 +45,13 @@ function DayChart({ hourly, estimateHourly, cloudByHour, supplyCapacity, current
     : null
 
   const supplyY = ty(supplyCapacity)
+  // Where gas starts: the top of what the grid can deliver without the peaker.
+  const gasY = (utilityCapacity > 0 && utilityCapacity < supplyCapacity) ? ty(utilityCapacity) : null
+
+  // Hours the peaker ran — actual and expected, tracked separately so the
+  // reveal can show both.
+  const gasHours    = chartData.filter(h => h.peaker > 0.001).map(h => h.t)
+  const estGasHours = (estimateHourly ?? []).filter(h => h.peaker > 0.001).map(h => h.t)
 
   return (
     <svg
@@ -62,24 +69,48 @@ function DayChart({ hourly, estimateHourly, cloudByHour, supplyCapacity, current
         />
       ))}
 
+      {/* Gas hours. Same language as the demand curves below: the estimate is
+          a dashed outline ("we expect to burn gas here"), the actual day is a
+          solid fill ("gas actually ran here"). When both are on screen, the
+          gap between them is the story. */}
+      {estGasHours.map(t => (
+        <rect key={`eg${t}`}
+          x={tx(t) + 0.5} y={0.5}
+          width={VW / 24 - 1} height={VH - 1}
+          fill="#C4341A" fillOpacity={isActual ? 0 : 0.10}
+          stroke="#C4341A" strokeWidth={0.8} strokeDasharray="3,2" opacity={0.55}
+        />
+      ))}
+      {isActual && gasHours.map(t => (
+        <rect key={`g${t}`}
+          x={tx(t)} y={0}
+          width={VW / 24} height={VH}
+          fill="#C4341A" opacity={0.17}
+        />
+      ))}
+
       {/* Brownout / shed zones — revealed after day is complete */}
       {dayComplete && chartData.map(h => h.shedBuildingIds?.length > 0 && (
         <rect key={`b${h.t}`}
           x={tx(h.t)} y={0}
           width={VW / 24} height={VH}
-          fill="#B5421A" opacity={0.18}
+          fill="#7A1A08" opacity={0.3}
         />
       ))}
 
-      {/* Supply cap line */}
+      {/* Supply cap line — cross this and the lights go out */}
       <line
         x1={0} y1={supplyY} x2={VW} y2={supplyY}
         stroke="#4A7EB5" strokeWidth={1.2} strokeDasharray="6,3" opacity={0.85}
       />
-      <text x={VW - 2} y={supplyY - 3} textAnchor="end"
-        fontSize={7} fill="#4A7EB5" fontFamily="monospace" opacity={0.85}>
-        grid cap
-      </text>
+
+      {/* Gas line — cross this and the peaker has to start */}
+      {gasY !== null && (
+        <line
+          x1={0} y1={gasY} x2={VW} y2={gasY}
+          stroke="#C4341A" strokeWidth={1.1} strokeDasharray="4,3" opacity={0.8}
+        />
+      )}
 
       {/* Estimate demand curve (lighter, shown under actual when both available) */}
       {estPts && (
@@ -118,7 +149,7 @@ function DayChart({ hourly, estimateHourly, cloudByHour, supplyCapacity, current
 
 export default function DayClock({
   hour, playing, started, dayComplete,
-  hourly, estimateHourly, cloudByHour, supplyCapacity,
+  hourly, estimateHourly, cloudByHour, supplyCapacity, utilityCapacity,
   temperature, actualTemperature,
   onRun, onPause, onResume, onReset,
 }) {
@@ -199,17 +230,25 @@ export default function DayClock({
               <span style={{ fontSize: '0.6rem', color: '#9A8A76', fontFamily: 'monospace' }}>demand</span>
             </span>
             <span style={{ display: 'flex', alignItems: 'center', gap: '0.25rem' }}>
-              <span style={{ width: 14, height: 1.5, background: '#4A7EB5', borderRadius: 2, display: 'inline-block' }} />
-              <span style={{ fontSize: '0.6rem', color: '#9A8A76', fontFamily: 'monospace' }}>grid cap</span>
+              <span style={{ width: 14, height: 0, borderTop: '1.5px dashed #4A7EB5', display: 'inline-block' }} />
+              <span style={{ fontSize: '0.6rem', color: '#9A8A76', fontFamily: 'monospace' }}>grid limit</span>
+            </span>
+            <span style={{ display: 'flex', alignItems: 'center', gap: '0.25rem' }}>
+              <span style={{ width: 14, height: 0, borderTop: '1.5px dashed #C4341A', display: 'inline-block' }} />
+              <span style={{ fontSize: '0.6rem', color: '#C4341A', fontFamily: 'monospace' }}>gas starts</span>
             </span>
             <span style={{ display: 'flex', alignItems: 'center', gap: '0.25rem' }}>
               <span style={{ width: 10, height: 10, background: '#3A4A5A', borderRadius: 1, opacity: 0.4, display: 'inline-block' }} />
               <span style={{ fontSize: '0.6rem', color: '#9A8A76', fontFamily: 'monospace' }}>cloud</span>
             </span>
+            <span style={{ display: 'flex', alignItems: 'center', gap: '0.25rem' }}>
+              <span style={{ width: 10, height: 10, background: '#C4341A', borderRadius: 1, opacity: 0.35, display: 'inline-block' }} />
+              <span style={{ fontSize: '0.6rem', color: '#C4341A', fontFamily: 'monospace' }}>burning gas</span>
+            </span>
             {brownoutHours.length > 0 && (
               <span style={{ display: 'flex', alignItems: 'center', gap: '0.25rem' }}>
                 <span style={{ width: 10, height: 10, background: '#B5421A', borderRadius: 1, opacity: 0.4, display: 'inline-block' }} />
-                <span style={{ fontSize: '0.6rem', color: '#B5421A', fontFamily: 'monospace' }}>brownout</span>
+                <span style={{ fontSize: '0.6rem', color: '#7A1A08', fontFamily: 'monospace' }}>lights out</span>
               </span>
             )}
           </div>
@@ -222,6 +261,7 @@ export default function DayClock({
           hourly={hourly}
           estimateHourly={estimateHourly}
           cloudByHour={cloudByHour}
+          utilityCapacity={utilityCapacity}
           supplyCapacity={supplyCapacity ?? 2.0}
           currentHour={hour}
           dayComplete={dayComplete}

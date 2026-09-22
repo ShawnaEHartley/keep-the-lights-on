@@ -2,12 +2,23 @@ import { describe, it, expect } from 'vitest'
 import { runDay } from './dispatch.js'
 import { expectedWeather } from './weather.js'
 import { ROUND_TRIP_EFF } from './constants.js'
+import { deriveHouseTypes } from '../state/cityModel.js'
 
-// Calibration anchor: deterministic (expectedWeather), no randomness.
-// 5 houses + 1 grocery + 1 office, no DERs, modernization 30%, temp 80°F.
-// Expected: brownoutHours ≈ 2, falls in the evening block, houses shed — grocery stays lit.
+// ── Calibration anchor (spec §8, revised) ────────────────────────────────────
+// Deterministic (expectedWeather), no randomness.
+// 5 houses + 1 grocery + 1 office + 1 utility + 1 peaker, no DERs,
+// modernization 30%, temp 80°F.
+//
+// The anchor used to assert ~2 brownout hours. It now asserts the opposite:
+// the city STAYS LIT and pays for it by running the gas peaker through the
+// evening peak. US households overwhelmingly experience price and emissions,
+// not outages — so the peaker, not the blackout, is the failure the game is
+// built to make visible. Blackouts are reserved for genuine extremis
+// (off-grid, or no peaker), covered by their own tests below.
 
-const ANCHOR_BUILDINGS = [
+// Run through deriveHouseTypes so the anchor is the city the player actually
+// sees — roughly 1 in 5 houses is work-from-home, which draws more at midday.
+const DEMAND_BUILDINGS = deriveHouseTypes([
   { id: 1, type: 'house'   },
   { id: 2, type: 'house'   },
   { id: 3, type: 'house'   },
@@ -15,42 +26,107 @@ const ANCHOR_BUILDINGS = [
   { id: 5, type: 'house'   },
   { id: 6, type: 'grocery' },
   { id: 7, type: 'office'  },
+])
+const INFRA = [
+  { id: 8, type: 'utility' },
+  { id: 9, type: 'peaker'  },
 ]
+const ANCHOR_BUILDINGS = [...DEMAND_BUILDINGS, ...INFRA]
 const ANCHOR_WEATHER = expectedWeather({ temperature: 80, cloudCover: 0, season: 'summer', modernization: 30 })
 
 describe('calibration anchor', () => {
-  it('produces ~2 brownout hours in the evening with the starting city', () => {
+  it('keeps the starting city lit — no blackouts', () => {
     const result = runDay({ buildings: ANCHOR_BUILDINGS, weather: ANCHOR_WEATHER })
-
-    expect(result.totals.brownoutHours).toBeGreaterThanOrEqual(1)
-    expect(result.totals.brownoutHours).toBeLessThanOrEqual(3)
-
-    const eveningBrownouts = result.hourly.filter(h => h.t >= 16 && h.t <= 21 && h.shedBuildingIds.length > 0)
-    expect(eveningBrownouts.length).toBeGreaterThan(0)
+    expect(result.totals.brownoutHours).toBe(0)
+    expect(result.totals.perBuildingHoursLost).toBe(0)
   })
 
-  it('sheds houses first — grocery stays lit during brownout hours', () => {
+  it('runs the peaker through the evening peak to do it', () => {
     const result = runDay({ buildings: ANCHOR_BUILDINGS, weather: ANCHOR_WEATHER })
 
+    expect(result.totals.peakerHours).toBeGreaterThanOrEqual(2)
+    expect(result.totals.peakerHours).toBeLessThanOrEqual(5)
+    expect(result.totals.peakerEnergy).toBeGreaterThan(0)
+
+    // Every peaker hour falls in the evening block
+    const peakerRunHours = result.hourly.filter(h => h.peaker > 0.001).map(h => h.t)
+    expect(peakerRunHours.length).toBeGreaterThan(0)
+    for (const t of peakerRunHours) {
+      expect(t).toBeGreaterThanOrEqual(15)
+      expect(t).toBeLessThanOrEqual(22)
+    }
+  })
+
+  it('has positive reserve margin — the city is not on the edge', () => {
+    const result = runDay({ buildings: ANCHOR_BUILDINGS, weather: ANCHOR_WEATHER })
+    expect(result.totals.reserveMargin).toBeGreaterThan(0)
+  })
+})
+
+describe('the peaker is what keeps the lights on', () => {
+  it('removing the peaker turns evening peak into blackout', () => {
+    const noPeaker = runDay({
+      buildings: ANCHOR_BUILDINGS.filter(b => b.type !== 'peaker'),
+      weather: ANCHOR_WEATHER,
+    })
+    expect(noPeaker.totals.brownoutHours).toBeGreaterThan(0)
+    expect(noPeaker.totals.peakerEnergy).toBe(0)
+  })
+
+  it('adding a second peaker does not increase gas burned — demand is the driver', () => {
+    const one = runDay({ buildings: ANCHOR_BUILDINGS, weather: ANCHOR_WEATHER })
+    const two = runDay({
+      buildings: [...ANCHOR_BUILDINGS, { id: 10, type: 'peaker' }],
+      weather: ANCHOR_WEATHER,
+    })
+    // Extra headroom, but nothing extra to serve
+    expect(two.totals.peakerEnergy).toBeCloseTo(one.totals.peakerEnergy, 5)
+    expect(two.totals.reserveMargin).toBeGreaterThan(one.totals.reserveMargin)
+  })
+
+  it('modernizing the grid quiets the peaker', () => {
+    const dirty = runDay({ buildings: ANCHOR_BUILDINGS, weather: ANCHOR_WEATHER })
+    const clean = runDay({
+      buildings: ANCHOR_BUILDINGS,
+      weather: expectedWeather({ temperature: 80, cloudCover: 0, season: 'summer', modernization: 90 }),
+    })
+    expect(clean.totals.peakerEnergy).toBeLessThan(dirty.totals.peakerEnergy)
+    expect(clean.totals.peakerHours).toBeLessThan(dirty.totals.peakerHours)
+    expect(clean.totals.brownoutHours).toBe(0)
+  })
+})
+
+describe('blackouts — last resort only', () => {
+  it('off-grid with no storage goes dark', () => {
+    const offGrid = runDay({ buildings: DEMAND_BUILDINGS, weather: ANCHOR_WEATHER })
+    expect(offGrid.totals.brownoutHours).toBeGreaterThan(0)
+  })
+
+  it('sheds houses first — grocery stays lit', () => {
+    // No peaker → the evening peak exceeds supply and shedding kicks in
+    const result = runDay({
+      buildings: ANCHOR_BUILDINGS.filter(b => b.type !== 'peaker'),
+      weather: ANCHOR_WEATHER,
+    })
     const shedHours = result.hourly.filter(h => h.shedBuildingIds.length > 0)
     expect(shedHours.length).toBeGreaterThan(0)
 
     for (const h of shedHours) {
-      // Grocery (id 6) must not be shed while any house (ids 1–5) is present
       const housesShed = h.shedBuildingIds.some(id => id >= 1 && id <= 5)
       if (housesShed) {
-        expect(h.shedBuildingIds).not.toContain(6)  // grocery stays lit
+        expect(h.shedBuildingIds).not.toContain(6)  // grocery (id 6) stays lit
       }
     }
   })
 
   it('perBuildingHoursLost counts shed buildings, not grid × brownoutHours', () => {
-    const result = runDay({ buildings: ANCHOR_BUILDINGS, weather: ANCHOR_WEATHER })
+    const result = runDay({
+      buildings: ANCHOR_BUILDINGS.filter(b => b.type !== 'peaker'),
+      weather: ANCHOR_WEATHER,
+    })
     const { brownoutHours, perBuildingHoursLost } = result.totals
-
-    // If shortfall is small, only 1 house may shed per hour — not all 7 buildings
     expect(perBuildingHoursLost).toBeGreaterThan(0)
-    expect(perBuildingHoursLost).toBeLessThan(brownoutHours * ANCHOR_BUILDINGS.length)
+    expect(perBuildingHoursLost).toBeLessThan(brownoutHours * DEMAND_BUILDINGS.length)
   })
 })
 
@@ -72,6 +148,7 @@ describe('supply features', () => {
         { id: 1, type: 'house' }, { id: 2, type: 'house' },
         { id: 3, type: 'house' }, { id: 4, type: 'house' },
         { id: 5, type: 'house' },
+        ...INFRA,
       ],
       solarUnits: [1, 1, 1, 1, 1],
       batteries: [],
@@ -86,6 +163,7 @@ describe('supply features', () => {
         { id: 1, type: 'house' }, { id: 2, type: 'house' },
         { id: 3, type: 'house' }, { id: 4, type: 'house' },
         { id: 5, type: 'house' },
+        ...INFRA,
       ],
       solarUnits: [1, 1, 1, 1, 1],
       weather: expectedWeather({ temperature: 72, cloudCover: 0, season: 'summer', modernization: 30 }),
@@ -96,8 +174,8 @@ describe('supply features', () => {
   })
 
   it('battery round-trip efficiency: deliver ≈ stored × 0.90', () => {
-    // Single battery, tiny demand so it fully charges from solar then fully discharges overnight
-    // Use high solar + low night utility so battery must carry overnight
+    // Deliberately off-grid (no utility tile) so the battery is the only thing
+    // carrying the overnight load and actually has to discharge.
     const result = runDay({
       buildings: [{ id: 1, type: 'house' }],
       solarUnits: [3],
@@ -107,34 +185,29 @@ describe('supply features', () => {
     const totalCharged    = result.hourly.reduce((s, h) => s + h.batteryCharge,    0)
     const totalDischarged = result.hourly.reduce((s, h) => s + h.batteryDischarge, 0)
 
-    // Discharged should be ≤ charged × eff (efficiency loss on discharge)
-    if (totalCharged > 0.1) {
-      expect(totalDischarged).toBeLessThanOrEqual(totalCharged * ROUND_TRIP_EFF + 0.01)
-    }
+    expect(totalCharged).toBeGreaterThan(0.1)
+    expect(totalDischarged).toBeLessThanOrEqual(totalCharged * ROUND_TRIP_EFF + 0.01)
   })
 })
 
 describe('carbon decoupling', () => {
   it('zero peaker energy on a well-supplied grid still has non-zero baseload energy', () => {
-    // modernization=100 → ample supply, no brownouts/peaker needed
     const result = runDay({
       buildings: ANCHOR_BUILDINGS,
       weather: expectedWeather({ temperature: 72, cloudCover: 0, season: 'summer', modernization: 100 }),
     })
-    // Peaker should not fire; baseload still serves the city all day → emits carbon
     expect(result.totals.energyBySource.peaker).toBeLessThan(0.01)
     expect(result.totals.energyBySource.baseload).toBeGreaterThan(5)
   })
 })
 
 describe('reserve margin', () => {
-  it('reserve margin is negative when brownouts occur', () => {
-    const result = runDay({ buildings: ANCHOR_BUILDINGS, weather: ANCHOR_WEATHER })
-    // Peak demand 2.22 > available capacity 2.1 → negative reserve
-    expect(result.totals.reserveMargin).toBeLessThan(0)
+  it('goes negative when the city loses its supply', () => {
+    const offGrid = runDay({ buildings: DEMAND_BUILDINGS, weather: ANCHOR_WEATHER })
+    expect(offGrid.totals.reserveMargin).toBeLessThan(0)
   })
 
-  it('reserve margin improves when modernization increases supply', () => {
+  it('improves when modernization increases supply', () => {
     const low  = runDay({ buildings: ANCHOR_BUILDINGS, weather: expectedWeather({ temperature: 80, modernization: 30  }) })
     const high = runDay({ buildings: ANCHOR_BUILDINGS, weather: expectedWeather({ temperature: 80, modernization: 100 }) })
     expect(high.totals.reserveMargin).toBeGreaterThan(low.totals.reserveMargin)

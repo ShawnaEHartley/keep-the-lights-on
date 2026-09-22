@@ -1,9 +1,10 @@
 import { useState, useMemo, useEffect, useCallback } from 'react'
-import { DEFAULT_CITY } from './state/cityModel.js'
+import { DEFAULT_CITY, deriveHouseTypes, atLimit } from './state/cityModel.js'
 import { runDay } from './engine/dispatch.js'
 import { computeMetrics } from './engine/metrics.js'
 import { expectedWeather, sampleWeather } from './engine/weather.js'
 import Grid from './ui/Grid.jsx'
+import Inventory from './ui/Inventory.jsx'
 import EstimatePanel from './ui/EstimatePanel.jsx'
 import DayResults from './ui/DayResults.jsx'
 import DayClock from './ui/DayClock.jsx'
@@ -22,14 +23,19 @@ export default function App() {
 
   const climate = city.levers
 
+  // ~1 in 5 houses works from home. Derived rather than stored, so the ratio
+  // holds as houses are added; ids are preserved, so drag handlers still match.
+  const buildings   = useMemo(() => deriveHouseTypes(city.buildings), [city.buildings])
+  const derivedCity = useMemo(() => ({ ...city, buildings }), [city, buildings])
+
   // Estimate — always live, deterministic
   const estWeather = useMemo(() => expectedWeather(climate), [climate])
   const estimateResult = useMemo(() => runDay({
-    buildings:  city.buildings,
+    buildings,
     solarUnits: city.solarUnits,
     batteries:  city.batteries,
     weather:    estWeather,
-  }), [city, estWeather])
+  }), [buildings, city.solarUnits, city.batteries, estWeather])
 
   const estimateMetrics = useMemo(
     () => computeMetrics(estimateResult, null, null, climate.modernization),
@@ -57,7 +63,7 @@ export default function App() {
   const handleRun = useCallback(() => {
     const weather = sampleWeather(climate, Date.now())
     const result  = runDay({
-      buildings:  city.buildings,
+      buildings,
       solarUnits: city.solarUnits,
       batteries:  city.batteries,
       weather,
@@ -68,18 +74,39 @@ export default function App() {
     setStarted(true)
     setDayComplete(false)
     setPlaying(true)
-  }, [city, climate])
+  }, [buildings, city.solarUnits, city.batteries, climate])
 
-  // Re-site a circuit. Cosmetic only — the engine counts building types, not
-  // positions — so the estimate is unchanged; only the flow arrows re-route.
-  const handleMoveBuilding = useCallback((id, col, row) => {
+  // ── Editing the city ────────────────────────────────────────────────────
+  // drag is { kind: 'move', id } for a tile already on the map, or
+  // { kind: 'new', type } for a type dragged out of the inventory.
+  const [drag, setDrag] = useState(null)
+
+  const handleDragTile = useCallback(id   => setDrag({ kind: 'move', id }), [])
+  const handleDragNew  = useCallback(type => setDrag({ kind: 'new',  type }), [])
+  const handleDragEnd  = useCallback(()   => setDrag(null), [])
+
+  // Moving is cosmetic — the engine counts building types, not positions.
+  // Adding and removing are not: supply capacity comes from the utility and
+  // peaker tiles, so editing those re-runs the estimate with real consequences.
+  const handleDropOnCell = useCallback((col, row) => {
     setCity(prev => {
       if (prev.buildings.some(b => b.col === col && b.row === row)) return prev
-      return {
-        ...prev,
-        buildings: prev.buildings.map(b => (b.id === id ? { ...b, col, row } : b)),
+      if (!drag) return prev
+
+      if (drag.kind === 'move') {
+        return { ...prev, buildings: prev.buildings.map(b => (b.id === drag.id ? { ...b, col, row } : b)) }
       }
+      // One utility per city — remove it to go off-grid, drop it back to reconnect
+      if (atLimit(prev.buildings, drag.type)) return prev
+      const nextId = prev.buildings.reduce((m, b) => Math.max(m, b.id), 0) + 1
+      return { ...prev, buildings: [...prev.buildings, { id: nextId, type: drag.type, col, row }] }
     })
+    setDrag(null)
+  }, [drag])
+
+  const handleDeleteBuilding = useCallback(id => {
+    setCity(prev => ({ ...prev, buildings: prev.buildings.filter(b => b.id !== id) }))
+    setDrag(null)
   }, [])
 
   const handlePause  = useCallback(() => setPlaying(false), [])
@@ -96,8 +123,25 @@ export default function App() {
   const hourData   = runResult.hourly[hour]
   const shedIds    = (started && hourData) ? (hourData.shedBuildingIds ?? []) : []
 
-  const activeWeather    = actualWeather ?? estWeather
-  const supplyCapacity   = (activeWeather.uCap ?? 1.9) + (activeWeather.peakCap ?? 0.1)
+  const activeWeather = actualWeather ?? estWeather
+
+  // Capacity now comes from the infrastructure on the map, not the lever alone
+  const utilityCount = buildings.filter(b => b.type === 'utility').length
+  const peakerCount  = buildings.filter(b => b.type === 'peaker').length
+  const supplyCapacity =
+    (activeWeather.uCapPerUtility   ?? 1.8) * utilityCount +
+    (activeWeather.peakCapPerPeaker ?? 1.0) * peakerCount
+
+  // The gas plant is the villain — light it up the moment it has to run
+  const peakerFiring = started && !dayComplete && (hourData?.peaker ?? 0) > 0.001
+
+  // Live gauge levels for the plant tiles
+  const supply = hourData ? {
+    utility: hourData.utility,
+    peaker:  hourData.peaker,
+    uCap:    runResult.totals.uCap,
+    peakCap: runResult.totals.peakCap,
+  } : null
 
   return (
     <div style={{ minHeight: '100vh', background: '#F5F1EA', fontFamily: 'Georgia, serif', color: '#1B2327' }}>
@@ -126,6 +170,7 @@ export default function App() {
         estimateHourly={estimateResult.hourly}
         cloudByHour={activeWeather.cloudByHour}
         supplyCapacity={supplyCapacity}
+        utilityCapacity={runResult.totals.uCap}
         temperature={climate.temperature}
         actualTemperature={actualWeather?.temperature ?? null}
         onRun={handleRun}
@@ -140,22 +185,40 @@ export default function App() {
           City Grid
         </div>
 
-        {/* Grid + flow arrows */}
-        <div style={{ display: 'inline-block', position: 'relative' }}>
-          <Grid
+        {/* Grid + flow arrows, with the inventory palette alongside */}
+        <div style={{ display: 'flex', gap: '1.5rem', alignItems: 'flex-start' }}>
+          <div style={{ display: 'inline-block', position: 'relative' }}>
+            <Grid
+              city={derivedCity}
+              shedIds={shedIds}
+              peakerFiring={peakerFiring}
+              hour={hour}
+              season={climate.season}
+              supply={supply}
+              modernization={climate.modernization}
+              drag={drag}
+              onDragTile={handleDragTile}
+              onDragEnd={handleDragEnd}
+              onDropOnCell={handleDropOnCell}
+              overlay={
+                <FlowArrows
+                  buildings={buildings}
+                  // Day over → clear the overlay entirely. Paused mid-day → keep
+                  // the lines but frozen (see `animate`).
+                  hourData={started && !dayComplete ? hourData : null}
+                  shedIds={shedIds}
+                  animate={playing}
+                />
+              }
+            />
+          </div>
+
+          <Inventory
             city={city}
-            shedIds={shedIds}
-            onMoveBuilding={handleMoveBuilding}
-            overlay={
-              <FlowArrows
-                buildings={city.buildings}
-                // Day over → clear the overlay entirely. Paused mid-day → keep
-                // the lines but frozen (see `animate`).
-                hourData={started && !dayComplete ? hourData : null}
-                shedIds={shedIds}
-                animate={playing}
-              />
-            }
+            drag={drag}
+            onDragNew={handleDragNew}
+            onDragEnd={handleDragEnd}
+            onDeleteBuilding={handleDeleteBuilding}
           />
         </div>
 
@@ -166,7 +229,7 @@ export default function App() {
               estimateResult={estimateResult}
               actualMetrics={actualMetrics}
               estimateMetrics={estimateMetrics}
-              city={city}
+              city={derivedCity}
               weather={actualWeather}
             />
           : <EstimatePanel estimateMetrics={estimateMetrics} />
