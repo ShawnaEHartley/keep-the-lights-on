@@ -2,8 +2,19 @@
 // The peaker is the headline: in the US the everyday cost of a tight grid is
 // gas and emissions, not outages, so the gas plant is what the panel shouts about.
 
+import { carbonBand, carbonMultiple } from '../engine/constants.js'
+
 const STATUS = (v, [good, warn]) =>
   v <= good ? '#3D7A5C' : v <= warn ? '#C4892A' : '#B5421A'
+
+const BAND_COLOR = { good: '#3D7A5C', warn: '#C4892A', bad: '#B5421A' }
+
+// "7×" / "1.4×" — one decimal only when it's under 10 and not whole
+export function timesLabel(x) {
+  if (x >= 10) return `${Math.round(x)}×`
+  const r = Math.round(x * 10) / 10
+  return `${Number.isInteger(r) ? r : r.toFixed(1)}×`
+}
 
 // 18 -> "6pm". The busiest hour needs a name a person recognises.
 export function hourLabel(h) {
@@ -108,8 +119,8 @@ export default function EstimatePanel({ estimateMetrics }) {
         <EstCol
           label="CO₂"
           value={carbon.total}
-          unit={`kg · good ≤ ${carbon.benchmark}`}
-          color={STATUS(carbon.total, [carbon.benchmark * 1.5, carbon.benchmark * 3])}
+          unit={`kg — ${timesLabel(carbonMultiple(carbon.total, carbon.benchmark))} what a clean grid would emit`}
+          color={BAND_COLOR[carbonBand(carbon.total, carbon.benchmark)]}
         />
         <EstCol
           label="Spare power at peak"

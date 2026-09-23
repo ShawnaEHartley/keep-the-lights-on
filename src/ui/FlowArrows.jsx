@@ -1,4 +1,5 @@
 import { GRID_COLS, GRID_ROWS, CELL_SIZE, CELL_STEP } from '../state/cityModel.js'
+import { unitLoad } from '../engine/dispatch.js'
 
 // pixel center of a grid cell (1-indexed col/row)
 const cx = col => (col - 1) * CELL_STEP + CELL_SIZE / 2
@@ -49,7 +50,7 @@ export default function FlowArrows({ buildings, hourData, animate = true }) {
   // short line to the utility, and only the utility draws lines to buildings.
   // Those lines redden as more of what's being delivered is gas.
   const utilities = buildings.filter(b => b.type === 'utility')
-  const peakers   = buildings.filter(b => b.type === 'peaker')
+  const peakers   = buildings.filter(b => b.type === 'peaker').sort((a, z) => a.id - z.id)
   const demand    = buildings.filter(b => DEMAND_TYPES.has(b.type))
 
   if (demand.length === 0) return null
@@ -62,7 +63,12 @@ export default function FlowArrows({ buildings, hourData, animate = true }) {
   // and has to feed buildings directly.
   const sources     = utilities.length ? utilities : peakers
   const perLine     = sources.length ? delivered / (demand.length * sources.length) : 0
-  const peakerPerUp = peakers.length ? hourData.peaker / peakers.length : 0
+  // Units commit in order, so only the ones actually running draw a line.
+  const peakerUnitCap = peakers.length ? (hourData.peakCap ?? 0) / peakers.length : 0
+  const peakerOutput  = p => {
+    if (!peakerUnitCap) return peakers.length ? hourData.peaker / peakers.length : 0
+    return unitLoad(hourData.peaker, peakerUnitCap, peakers.indexOf(p))
+  }
 
   return (
     <svg
@@ -82,12 +88,12 @@ export default function FlowArrows({ buildings, hourData, animate = true }) {
 
       {/* Peaker → utility: gas feeding INTO the grid, not into houses */}
       {hourData.peaker > 0.01 && utilities.length > 0 && peakers.map((p, pi) =>
-        utilities.map(u => (
+        peakerOutput(p) > 0.001 && utilities.map(u => (
           <FlowLine
             key={`pu${p.id}-${u.id}`}
             x1={cx(p.col)} y1={cy(p.row)} x2={cx(u.col)} y2={cy(u.row)}
             color="#C4341A"
-            width={flowWidth(peakerPerUp)}
+            width={flowWidth(peakerOutput(p))}
             delay={pi * 0.1}
             opacity={0.9}
             animate={animate}
@@ -114,7 +120,7 @@ export default function FlowArrows({ buildings, hourData, animate = true }) {
       {hourData.utility > 0.01 && utilities.map(u => (
         <circle key={`gu${u.id}`} cx={cx(u.col)} cy={cy(u.row)} r={10} fill={mixed} opacity={0.28} />
       ))}
-      {hourData.peaker > 0.01 && peakers.map(p => (
+      {hourData.peaker > 0.01 && peakers.map(p => peakerOutput(p) > 0.001 && (
         <circle key={`gp${p.id}`} cx={cx(p.col)} cy={cy(p.row)} r={10} fill="#C4341A" opacity={0.25} />
       ))}
 

@@ -6,6 +6,7 @@ import { expectedWeather, sampleWeather } from './engine/weather.js'
 import Grid from './ui/Grid.jsx'
 import Inventory from './ui/Inventory.jsx'
 import EstimatePanel from './ui/EstimatePanel.jsx'
+import Dashboard from './ui/Dashboard.jsx'
 import DayResults from './ui/DayResults.jsx'
 import DayClock from './ui/DayClock.jsx'
 import FlowArrows from './ui/FlowArrows.jsx'
@@ -80,6 +81,7 @@ export default function App() {
   // drag is { kind: 'move', id } for a tile already on the map, or
   // { kind: 'new', type } for a type dragged out of the inventory.
   const [drag, setDrag] = useState(null)
+  const [showDetails, setShowDetails] = useState(false)
 
   const handleDragTile = useCallback(id   => setDrag({ kind: 'move', id }), [])
   const handleDragNew  = useCallback(type => setDrag({ kind: 'new',  type }), [])
@@ -192,6 +194,7 @@ export default function App() {
               city={derivedCity}
               shedIds={shedIds}
               peakerFiring={peakerFiring}
+              live={started && !dayComplete}
               hour={hour}
               season={climate.season}
               supply={supply}
@@ -234,6 +237,33 @@ export default function App() {
             />
           : <EstimatePanel estimateMetrics={estimateMetrics} />
         }
+
+        {/* Detail view: same numbers, real terminology, each term defined */}
+        <button
+          onClick={() => setShowDetails(v => !v)}
+          style={{
+            marginTop: '0.9rem',
+            padding: '0.35rem 0.8rem',
+            border: '1px solid #C8C0B4',
+            borderRadius: 5,
+            background: showDetails ? '#E8E2D9' : '#F5F1EA',
+            color: '#7A6A56',
+            fontFamily: 'monospace',
+            fontSize: '0.66rem',
+            letterSpacing: '0.05em',
+            cursor: 'pointer',
+          }}
+        >
+          {showDetails ? '▾ hide the details' : '▸ what do these numbers mean?'}
+        </button>
+
+        {showDetails && (
+          <Dashboard
+            metrics={dayComplete && actualMetrics ? actualMetrics : estimateMetrics}
+            vsEstimate={dayComplete && actualMetrics ? actualMetrics.vsEstimate : null}
+            isActual={dayComplete && !!actualMetrics}
+          />
+        )}
       </main>
     </div>
   )

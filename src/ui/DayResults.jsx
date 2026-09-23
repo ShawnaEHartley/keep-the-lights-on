@@ -1,6 +1,7 @@
 // Full-width end-of-day summary panel — shown below the grid after Run Day completes
 
-import { hourLabel } from './EstimatePanel.jsx'
+import { hourLabel, timesLabel } from './EstimatePanel.jsx'
+import { carbonMultiple } from '../engine/constants.js'
 
 const BUILDING_LABELS = {
   house:     'House',
@@ -10,7 +11,12 @@ const BUILDING_LABELS = {
 }
 
 const DELTA_COLOR = d => d < 0 ? '#3D7A5C' : d > 0 ? '#B5421A' : '#9A8A76'
-const DELTA_LABEL = d => d === 0 ? 'as expected' : d > 0 ? `+${fmt(d)} (worse)` : `${fmt(d)} (better)`
+const DELTA_LABEL = (d, flip = false) => {
+  if (d === 0) return 'as expected'
+  const worse = flip ? d < 0 : d > 0
+  const sign  = d > 0 ? '+' : ''
+  return `${sign}${fmt(d)} (${worse ? 'worse' : 'better'})`
+}
 
 // Round to at most 2 decimals and drop trailing zeros. Subtracting two
 // one-decimal numbers in binary floating point gives things like
@@ -78,7 +84,7 @@ function CompareRow({ label, estimate, actual, unit = '', flip = false }) {
       </span>
       {diff !== null && diff !== 0 && (
         <span style={{ fontFamily: 'monospace', fontSize: '0.68rem', color }}>
-          {DELTA_LABEL(diff)}
+          {DELTA_LABEL(diff, flip)}
         </span>
       )}
       {diff === 0 && (
@@ -164,7 +170,7 @@ export default function DayResults({ actualResult, estimateResult, actualMetrics
           />
           <div style={{ borderTop: '1px solid #D8D0C4', marginTop: '0.6rem', paddingTop: '0.6rem', fontSize: '0.62rem', color: '#B0A090', fontFamily: 'monospace', lineHeight: 1.6 }}>
             spare power = how much more the city could have taken at {hourLabel(actualMetrics.peakHour ?? 18)}, its busiest hour
-            <br />CO₂ good ≤ {actualMetrics.carbon.benchmark} kg · cost ${actualMetrics.cost}
+            <br />CO₂ {timesLabel(carbonMultiple(actualMetrics.carbon.total, actualMetrics.carbon.benchmark))} what a clean grid would emit ({actualMetrics.carbon.benchmark} kg) · cost ${actualMetrics.cost}
           </div>
         </div>
 

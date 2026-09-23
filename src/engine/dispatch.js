@@ -13,6 +13,17 @@ const TEMP_COEFF     = 0.025  // fractional load increase per °F above threshol
 // Shed lowest-priority buildings first (spec §3.5)
 const SHED_ORDER = ['house', 'wfh_house', 'office', 'grocery']
 
+/**
+ * How much a single plant in a fleet is producing, given the fleet's total
+ * output. Units commit in order and each runs flat out before the next starts
+ * — real operators don't idle two turbines at half load when one at full load
+ * burns less fuel. The fleet total is unchanged; this is how it's divided.
+ */
+export function unitLoad(fleetTotal, unitCap, index) {
+  if (unitCap <= 0) return 0
+  return Math.max(0, Math.min(unitCap, fleetTotal - unitCap * index))
+}
+
 // ── Main dispatch loop ────────────────────────────────────────────────────────
 
 /**
@@ -146,7 +157,7 @@ export function runDay({ buildings, solarUnits = [], batteries = [], weather = {
       solarServed:      solarUsed,
       batteryCharge:    charged,
       batteryDischarge: discharged,
-      utility, peaker,
+      utility, peaker, peakCap,
       shortfall:     rawShortfall,
       curtailment,
       shedBuildingIds,

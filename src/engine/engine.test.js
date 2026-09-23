@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { runDay } from './dispatch.js'
+import { runDay, unitLoad } from './dispatch.js'
 import { expectedWeather } from './weather.js'
 import { ROUND_TRIP_EFF } from './constants.js'
 import { deriveHouseTypes } from '../state/cityModel.js'
@@ -82,6 +82,39 @@ describe('the peaker is what keeps the lights on', () => {
     // Extra headroom, but nothing extra to serve
     expect(two.totals.peakerEnergy).toBeCloseTo(one.totals.peakerEnergy, 5)
     expect(two.totals.reserveMargin).toBeGreaterThan(one.totals.reserveMargin)
+  })
+
+  it('commits peakers one at a time — the second stays cold until the first is flat out', () => {
+    const CAP = 1.0
+    // First unit carries everything it can before the second does anything
+    expect(unitLoad(0.4, CAP, 0)).toBeCloseTo(0.4)
+    expect(unitLoad(0.4, CAP, 1)).toBe(0)
+
+    expect(unitLoad(1.0, CAP, 0)).toBeCloseTo(1.0)
+    expect(unitLoad(1.0, CAP, 1)).toBe(0)
+
+    // Only past the first unit's capacity does the second pick up the excess
+    expect(unitLoad(1.2, CAP, 0)).toBeCloseTo(1.0)
+    expect(unitLoad(1.2, CAP, 1)).toBeCloseTo(0.2)
+
+    // No unit ever exceeds its own nameplate, and the split is conservative
+    const total = 1.7
+    const split = [0, 1].map(i => unitLoad(total, CAP, i))
+    expect(Math.max(...split)).toBeLessThanOrEqual(CAP)
+    expect(split.reduce((a, b) => a + b, 0)).toBeCloseTo(total)
+  })
+
+  it('a second peaker adds headroom that prevents blackouts', () => {
+    // A city big enough that one peaker cannot cover the evening peak
+    const big = [...Array(14)].map((_, i) => ({ id: i + 1, type: 'house' }))
+    big.push({ id: 80, type: 'grocery' }, { id: 81, type: 'office' }, { id: 90, type: 'utility' })
+    const hot = expectedWeather({ temperature: 95, cloudCover: 0, season: 'summer', modernization: 30 })
+
+    const one = runDay({ buildings: [...big, { id: 100, type: 'peaker' }], weather: hot })
+    const two = runDay({ buildings: [...big, { id: 100, type: 'peaker' }, { id: 101, type: 'peaker' }], weather: hot })
+
+    expect(one.totals.brownoutHours).toBeGreaterThan(0)
+    expect(two.totals.brownoutHours).toBeLessThan(one.totals.brownoutHours)
   })
 
   it('modernizing the grid quiets the peaker', () => {

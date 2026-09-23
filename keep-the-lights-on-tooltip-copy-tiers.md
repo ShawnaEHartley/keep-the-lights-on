@@ -81,6 +81,35 @@ They belong to whichever tier system gets built.
 
 ---
 
+## Parked behaviour: the peaker warm-up state
+
+*Built and working, deliberately switched off — 2026-09-23.*
+
+Real operators commit gas turbines **before** they are strictly needed: the
+machines take minutes to start, and systems hold operating reserve. So a peaker
+begins warming while the grid still has roughly 10% headroom, then fires for
+real once that runs out.
+
+This shipped as a third tile state — grey `PEAKER` → amber `WARMING` → red
+`BURNING` — and was then turned off. At the novice level a plant should read as
+simply **off or burning**; a third state is one more thing to decode before the
+basic idea has landed. It belongs to the higher knowledge levels.
+
+**To re-enable:** set `SHOW_WARMUP = true` in [src/ui/Grid.jsx](src/ui/Grid.jsx).
+The logic stays wired up and tested — `peakerWarming()` generalises across a
+fleet, so each unit warms when whatever feeds in ahead of it (the utility for
+the first peaker, the previous peaker for the rest) passes 90%.
+
+| Tier | Tile states | Tooltip line |
+|---|---|---|
+| **Novice (shipped)** | off · burning | `off — not needed right now` |
+| **Higher tiers (parked)** | off · warming · burning | `warming up — the grid is nearly maxed` |
+
+Parked supporting copy, for whichever tier gets it:
+
+> Gas turbines take minutes to start, so they're fired up before they're
+> strictly needed — usually once the grid is about 90% used.
+
 ## Notes for whoever builds this
 
 - **The middle tier ("DER-pilled") is unwritten.** Only the two ends exist.

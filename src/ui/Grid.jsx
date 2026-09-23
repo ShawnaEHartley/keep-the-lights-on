@@ -1,6 +1,7 @@
 import { useState } from 'react'
 import { GRID_COLS, GRID_ROWS, CELL_SIZE, CELL_STEP } from '../state/cityModel.js'
 import { BUILDING_STYLE, CIRCUIT_INFO, METERED_TYPES, loadLevelAt, busiestWindow } from './buildingTypes.js'
+import { unitLoad } from '../engine/dispatch.js'
 
 // Bulb in the tile corner showing how much electricity this building is
 // drawing right now — all of it, not just lighting. Brightness tracks the
@@ -48,8 +49,15 @@ const PLANT_FILL  = { utility: '#4A7EB5', peaker: '#C4341A' }
 const PEAKER_WARM = '#C4892A'
 
 // Real operators commit gas turbines before they're strictly needed — the
-// machines take minutes to start, and systems hold operating reserve. So the
-// peaker warms while the grid still has ~10% headroom, then fires for real.
+// machines take minutes to start, and systems hold operating reserve — so a
+// peaker warms while the grid still has ~10% headroom before it fires.
+//
+// That's a detail for someone who already understands the basics. At the
+// novice level a plant is simply off or burning, with no third state to
+// decode. The logic below stays wired up and tested; flip this to true to
+// surface it for the higher knowledge levels.
+// See keep-the-lights-on-tooltip-copy-tiers.md.
+const SHOW_WARMUP = false
 const WARM_THRESHOLD = 0.9
 
 // `use` is 0–1 utilisation. Returns how much of the tile is coloured.
@@ -173,10 +181,10 @@ function Tooltip({ building, shed, hour, season, modernization, use, warming }) 
           <span style={{ color: use > 0.001 ? '#FF8A5A' : warming ? '#E0A23A' : '#7C8A85' }}>
             {use > 0.001 ? `burning — ${Math.round(use * 100)}% of capacity`
               : warming ? 'warming up — the grid is nearly maxed'
-              : 'cold — not needed right now'}
+              : 'off — not needed right now'}
           </span>
           <div style={{ color: '#8A9691', marginTop: 3, fontFamily: 'Georgia, serif', fontSize: '0.66rem' }}>
-            Gas turbines take minutes to start, so they're fired up before they're strictly needed — usually once the grid is about 90% used.
+            It sits idle most of the day and only switches on once everything cheaper is used up.
           </div>
         </div>
       )}
@@ -190,7 +198,7 @@ function Tooltip({ building, shed, hour, season, modernization, use, warming }) 
 }
 
 export default function Grid({
-  city, overlay, shedIds = [], peakerFiring = false, hour = 0, season = 'summer',
+  city, overlay, shedIds = [], peakerFiring = false, live = false, hour = 0, season = 'summer',
   supply = null, modernization = 30,
   drag, onDragTile, onDragEnd, onDropOnCell,
 }) {
@@ -215,15 +223,35 @@ export default function Grid({
   // Per-plant gauge levels. Output is shared evenly across plants of a kind,
   // matching how the engine pools their capacity.
   const utilityCount = buildings.filter(b => b.type === 'utility').length
-  const peakerCount  = buildings.filter(b => b.type === 'peaker').length
-  const utilityFill  = supply && supply.uCap   > 0 ? supply.utility / supply.uCap   : 0
-  const peakerFill   = supply && supply.peakCap > 0 ? supply.peaker  / supply.peakCap : 0
-  const peakerWarming = !!supply && utilityFill >= WARM_THRESHOLD && peakerFill <= 0.001
+  const peakerList   = buildings.filter(b => b.type === 'peaker').sort((a, z) => a.id - z.id)
+  const peakerCount  = peakerList.length
+  const utilityFill  = supply && supply.uCap > 0 ? supply.utility / supply.uCap : 0
+  const unitCap      = peakerCount && supply ? supply.peakCap / peakerCount : 0
+
+  // Each peaker runs flat out before the next one starts, so its gauge shows
+  // its own load — not the fleet average.
+  const peakerUse = b => {
+    if (!supply || !unitCap) return 0
+    const i = peakerList.findIndex(p => p.id === b.id)
+    return unitLoad(supply.peaker, unitCap, i) / unitCap
+  }
+
+  // A unit warms when the stage feeding in ahead of it is nearly maxed: the
+  // utility for the first peaker, the previous peaker for the rest.
+  const peakerWarming = b => {
+    if (!supply || !unitCap) return false
+    const i = peakerList.findIndex(p => p.id === b.id)
+    if (peakerUse(b) > 0.001) return false
+    const upstream = i === 0
+      ? utilityFill
+      : unitLoad(supply.peaker, unitCap, i - 1) / unitCap
+    return upstream >= WARM_THRESHOLD
+  }
 
   // Utilisation 0–1 for a plant tile; null for anything that isn't a plant.
   const useFor = b =>
     b.type === 'utility' ? (utilityCount ? utilityFill : 0)
-    : b.type === 'peaker' ? (peakerCount ? peakerFill : 0)
+    : b.type === 'peaker' ? peakerUse(b)
     : null
 
   // Constrain to the grid's own width so the legend can't stretch this
@@ -266,8 +294,8 @@ export default function Grid({
                   <BuildingTile
                     building={building}
                     shed={shedSet.has(building.id)}
-                    firing={peakerFiring && building.type === 'peaker'}
-                    warming={building.type === 'peaker' && peakerWarming}
+                    firing={building.type === 'peaker' && live && peakerUse(building) > 0.001}
+                    warming={SHOW_WARMUP && building.type === 'peaker' && live && peakerWarming(building)}
                     use={useFor(building)}
                     hour={hour}
                     season={season}
@@ -285,7 +313,7 @@ export default function Grid({
         {overlay}
         {hovered && !drag && (
           <Tooltip building={hovered} shed={shedSet.has(hovered.id)} hour={hour} season={season}
-            modernization={modernization} use={useFor(hovered)} warming={hovered.type === 'peaker' && peakerWarming} />
+            modernization={modernization} use={useFor(hovered)} warming={SHOW_WARMUP && hovered.type === 'peaker' && live && peakerWarming(hovered)} />
         )}
       </div>
 

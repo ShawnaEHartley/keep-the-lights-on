@@ -56,6 +56,7 @@ export function computeMetrics(actualResult, estimateResult = null, prevDayResul
       peakerEnergy:  roundOne(peakerEnergy - est.peakerEnergy),
       peakerHours:   peakerHours - est.peakerHours,
       carbon:        carbonTotal   - estCarbon,
+      reserveMargin: Math.round(reserveMargin * 100) - Math.round(est.reserveMargin * 100),
     }
   }
 

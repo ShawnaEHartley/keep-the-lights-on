@@ -17,6 +17,25 @@ export function baseloadCarbon(renewableMix) {
 // "Good" benchmark: same demand served by a clean supply (high-renewable grid + own solar)
 export const BENCHMARK_CARBON = 0.10       // kg CO₂ / EU
 
+// Carbon is judged as a MULTIPLE of that benchmark, not against it directly.
+// Rated against the benchmark itself, only a 100%-renewable grid ever scored
+// green — every realistic mix from 15% to 70% read identical red, so halving
+// your emissions moved nothing and the metric taught nothing. These bands
+// spread the realistic range across all three colours so progress is visible.
+// The headline still reports the true multiple, so a greener dot never hides
+// how big the remaining gap is.
+export const CARBON_BANDS = { good: 3, warn: 6 }
+
+export function carbonMultiple(total, benchmark) {
+  return benchmark > 0 ? total / benchmark : 0
+}
+
+// → 'good' | 'warn' | 'bad'
+export function carbonBand(total, benchmark) {
+  const x = carbonMultiple(total, benchmark)
+  return x <= CARBON_BANDS.good ? 'good' : x <= CARBON_BANDS.warn ? 'warn' : 'bad'
+}
+
 // Per-source costs (readout only — no dispatch signal in v1)
 export const UTILITY_COST = 0.80           // $ / EU
 export const PEAKER_COST  = 2.00           // $ / EU
